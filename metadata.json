@@ -1,0 +1,6 @@
+{
+  "name": "AEOS Content Command",
+  "description": "Full-stack autonomous content and SEO operations suite featuring blog writers, social post composers, script generators, grounded trending search tracker, ads copy, and autopilot permission settings.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
