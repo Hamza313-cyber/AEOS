@@ -559,7 +559,7 @@ export default function App() {
 
       {/* Humble Elegant Footer */}
       <footer className="border-t border-slate-900 bg-slate-950 py-4 px-6 mt-12 text-center text-[10px] text-slate-600 font-mono">
-        AEOS Content Command © 2026 • Powered by Google Search Grounded Gemini Flash Models • Offline Local Persistence Active
+        AEOS Content Command v1.1.0 © 2026 • Built by Tabish AI • Powered by Google Gemini
       </footer>
     </div>
   );
