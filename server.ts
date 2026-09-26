@@ -1,4 +1,5 @@
 import express from "express";
+import crypto from "crypto";
 import path from "path";
 import dotenv from "dotenv";
 import { GoogleGenAI, Type } from "@google/genai";
@@ -11,6 +12,112 @@ const PORT = 3000;
 
 // Middleware
 app.use(express.json({ limit: "5mb" }));
+
+// Cloud Run sits behind a proxy; trust it so req.ip is the real visitor IP.
+app.set("trust proxy", 1);
+
+// ---------- Protection layer ----------
+// Optional password lock. Set APP_PASSWORD in AI Studio Secrets (or your host's env vars).
+// If it is empty, the app stays open (useful while developing).
+const APP_PASSWORD = process.env.APP_PASSWORD || "";
+
+function passwordMatches(given: unknown): boolean {
+  if (!APP_PASSWORD) return true;
+  if (typeof given !== "string") return false;
+  const a = crypto.createHash("sha256").update(given).digest();
+  const b = crypto.createHash("sha256").update(APP_PASSWORD).digest();
+  return crypto.timingSafeEqual(a, b);
+}
+
+// Lets the frontend know whether a password is needed and whether the saved one works.
+app.get("/api/auth-check", (req, res) => {
+  res.json({ required: !!APP_PASSWORD, ok: passwordMatches(req.get("x-app-password")) });
+});
+
+app.use("/api", (req, res, next) => {
+  if (!passwordMatches(req.get("x-app-password"))) {
+    res.status(401).json({ error: "Password required. Please unlock AEOS first." });
+    return;
+  }
+  next();
+});
+
+// Simple in-memory rate limit per visitor IP (fine for a single Cloud Run instance).
+// Change the number with the RATE_LIMIT_PER_HOUR env var.
+const RATE_LIMIT_PER_HOUR = Number(process.env.RATE_LIMIT_PER_HOUR) || 40;
+const hits = new Map<string, number[]>();
+
+app.use("/api", (req, res, next) => {
+  if (req.method !== "POST") return next();
+  const now = Date.now();
+  const windowStart = now - 60 * 60 * 1000;
+  const ip = req.ip || "unknown";
+  const recent = (hits.get(ip) || []).filter((t) => t > windowStart);
+  if (recent.length >= RATE_LIMIT_PER_HOUR) {
+    const retryMin = Math.ceil((recent[0] + 60 * 60 * 1000 - now) / 60000);
+    res.status(429).json({ error: `Hourly limit reached (${RATE_LIMIT_PER_HOUR} AI requests). Try again in about ${retryMin} min.` });
+    return;
+  }
+  recent.push(now);
+  hits.set(ip, recent);
+  next();
+});
+
+// Clean old entries every 10 minutes so memory does not grow forever.
+setInterval(() => {
+  const windowStart = Date.now() - 60 * 60 * 1000;
+  for (const [ip, times] of hits) {
+    const recent = times.filter((t) => t > windowStart);
+    if (recent.length) hits.set(ip, recent);
+    else hits.delete(ip);
+  }
+}, 10 * 60 * 1000).unref();
+
+// Input size limits: stop huge inputs from burning the Gemini quota.
+function clip(value: unknown, max: number): string {
+  if (typeof value !== "string") return "";
+  return value.trim().slice(0, max);
+}
+function clipList(value: unknown, maxItems = 20, maxLen = 100): string[] {
+  if (!Array.isArray(value)) return [];
+  return value.filter((v) => typeof v === "string").slice(0, maxItems).map((v) => v.trim().slice(0, maxLen));
+}
+
+// Trim ad text to a hard character limit, cutting at a word boundary where possible.
+function fitLimit(text: unknown, max: number): string {
+  const t = typeof text === "string" ? text.trim() : "";
+  if (t.length <= max) return t;
+  const cut = t.slice(0, max);
+  const lastSpace = cut.lastIndexOf(" ");
+  return (lastSpace > max * 0.5 ? cut.slice(0, lastSpace) : cut).replace(/[\s,.;:-]+$/, "");
+}
+// ---------- End protection layer ----------
+
+// Gemini sometimes adds extra text or a second JSON block after the answer.
+// Parse the first complete JSON object instead of failing.
+function parseModelJson(text: string): any {
+  const t = text.trim().replace(/^```(?:json)?\s*/i, "").replace(/```\s*$/, "");
+  try {
+    return JSON.parse(t);
+  } catch {
+    const start = t.indexOf("{");
+    if (start === -1) throw new Error("AI response did not contain JSON. Please try again.");
+    let depth = 0;
+    let inString = false;
+    let escaped = false;
+    for (let i = start; i < t.length; i++) {
+      const ch = t[i];
+      if (inString) {
+        if (escaped) escaped = false;
+        else if (ch === "\\") escaped = true;
+        else if (ch === '"') inString = false;
+      } else if (ch === '"') inString = true;
+      else if (ch === "{") depth++;
+      else if (ch === "}" && --depth === 0) return JSON.parse(t.slice(start, i + 1));
+    }
+    throw new Error("AI response JSON was incomplete. Please try again.");
+  }
+}
 
 // Lazy initializer for Gemini client to prevent crash if key is not configured on boot
 let aiClient: GoogleGenAI | null = null;
@@ -34,7 +141,7 @@ function getGeminiClient(): GoogleGenAI {
 
 // 1. Trending topics tracker via web search grounding
 app.post("/api/trending", async (req, res) => {
-  const { niche } = req.body;
+  const niche = clip(req.body?.niche, 200);
   if (!niche) {
     res.status(400).json({ error: "Niche is required" });
     return;
@@ -73,7 +180,7 @@ Ensure your response is valid JSON and nothing else. No markdown wrappers like \
     const text = response.text || "{}";
     let parsedData;
     try {
-      parsedData = JSON.parse(text.trim());
+      parsedData = parseModelJson(text);
     } catch (parseErr) {
       console.error("Failed to parse trending JSON:", text);
       parsedData = { topics: [] };
@@ -107,7 +214,8 @@ Ensure your response is valid JSON and nothing else. No markdown wrappers like \
 
 // 2. Keyword & topic research module
 app.post("/api/research-keywords", async (req, res) => {
-  const { keyword, audience } = req.body;
+  const keyword = clip(req.body?.keyword, 200);
+  const audience = clip(req.body?.audience, 300);
   if (!keyword) {
     res.status(400).json({ error: "Seed keyword is required" });
     return;
@@ -143,7 +251,7 @@ Ensure your response is valid JSON and nothing else. No markdown wrappers.`;
     });
 
     const text = response.text || "{}";
-    let parsedData = JSON.parse(text.trim());
+    let parsedData = parseModelJson(text);
     parsedData.id = `kw-${Date.now()}`;
 
     res.json(parsedData);
@@ -155,7 +263,10 @@ Ensure your response is valid JSON and nothing else. No markdown wrappers.`;
 
 // 3. Generate proposed Outline/Strategy (Ask-Permission mode)
 app.post("/api/outline", async (req, res) => {
-  const { topic, keywords, audience, eeatPoints } = req.body;
+  const topic = clip(req.body?.topic, 300);
+  const keywords = clipList(req.body?.keywords);
+  const audience = clip(req.body?.audience, 300);
+  const eeatPoints = clip(req.body?.eeatPoints, 3000);
   if (!topic) {
     res.status(400).json({ error: "Topic is required" });
     return;
@@ -201,7 +312,7 @@ Ensure your response is valid JSON and nothing else. No markdown wrappers.`;
     });
 
     const text = response.text || "{}";
-    const parsedData = JSON.parse(text.trim());
+    const parsedData = parseModelJson(text);
     res.json(parsedData);
   } catch (err: any) {
     console.error("Error in /api/outline:", err);
@@ -211,7 +322,11 @@ Ensure your response is valid JSON and nothing else. No markdown wrappers.`;
 
 // 4. Blog/Article Writer
 app.post("/api/write-article", async (req, res) => {
-  const { topic, keywords, audience, eeatPoints, outline } = req.body;
+  const topic = clip(req.body?.topic, 300);
+  const keywords = clipList(req.body?.keywords);
+  const audience = clip(req.body?.audience, 300);
+  const eeatPoints = clip(req.body?.eeatPoints, 3000);
+  const outline = req.body?.outline && JSON.stringify(req.body.outline).length <= 20000 ? req.body.outline : {};
   if (!topic) {
     res.status(400).json({ error: "Topic is required" });
     return;
@@ -256,7 +371,8 @@ Please write the complete full-length article body (minimum 1200 words, rich wit
 
 // 5. Social Posts & Video Script distribution writer
 app.post("/api/write-distribution", async (req, res) => {
-  const { articleBody, topic } = req.body;
+  const articleBody = clip(req.body?.articleBody, 40000);
+  const topic = clip(req.body?.topic, 300);
   if (!articleBody) {
     res.status(400).json({ error: "Article content is required" });
     return;
@@ -313,7 +429,7 @@ Ensure your response is valid JSON and nothing else. No markdown wrappers.`;
     });
 
     const text = response.text || "{}";
-    const parsedData = JSON.parse(text.trim());
+    const parsedData = parseModelJson(text);
     res.json(parsedData);
   } catch (err: any) {
     console.error("Error in /api/write-distribution:", err);
@@ -323,7 +439,9 @@ Ensure your response is valid JSON and nothing else. No markdown wrappers.`;
 
 // 6. Meta & Google Ads copy generator
 app.post("/api/write-ads", async (req, res) => {
-  const { topic, productDescription, audience } = req.body;
+  const topic = clip(req.body?.topic, 300);
+  const productDescription = clip(req.body?.productDescription, 2000);
+  const audience = clip(req.body?.audience, 300);
   if (!topic) {
     res.status(400).json({ error: "Topic/Product is required" });
     return;
@@ -362,7 +480,11 @@ Strictly validate character counts for Google Ads inside the generated text. Ens
     });
 
     const text = response.text || "{}";
-    const parsedData = JSON.parse(text.trim());
+    const parsedData = parseModelJson(text);
+
+    // Enforce Google Ads limits in code (the AI does not always obey the prompt).
+    parsedData.googleHeadlines = (parsedData.googleHeadlines || []).map((h: unknown) => fitLimit(h, 30));
+    parsedData.googleDescriptions = (parsedData.googleDescriptions || []).map((d: unknown) => fitLimit(d, 90));
     res.json(parsedData);
   } catch (err: any) {
     console.error("Error in /api/write-ads:", err);

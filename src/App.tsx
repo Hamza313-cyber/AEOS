@@ -1,3 +1,4 @@
+import { apiFetch } from "./api";
 import React, { useState, useEffect } from "react";
 import { ContentItem, TrendingTopic, KeywordResearch, AgentLog } from "./types";
 import {
@@ -102,7 +103,7 @@ export default function App() {
     setIsProcessing(item.id);
     addLog("SEO Planning", "info", `Compiling search signals and citable GEO triggers for "${item.title}"...`);
     try {
-      const res = await fetch("/api/outline", {
+      const res = await apiFetch("/api/outline", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -153,7 +154,7 @@ export default function App() {
       );
 
       // Step A: Compose full Article
-      const writeRes = await fetch("/api/write-article", {
+      const writeRes = await apiFetch("/api/write-article", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -179,7 +180,7 @@ export default function App() {
 
       // Step B: Auto-compile multi-channel social distribution
       addLog("Distribution Setup", "info", `Formatting platform-native posts and video story script...`);
-      const distRes = await fetch("/api/write-distribution", {
+      const distRes = await apiFetch("/api/write-distribution", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ articleBody, topic: item.topic }),
@@ -196,7 +197,7 @@ export default function App() {
 
       // Step C: Auto-compile campaign ads copy
       addLog("Ads Generation", "info", `Drafting search responsive Headlines and Meta copy sets...`);
-      const adsRes = await fetch("/api/write-ads", {
+      const adsRes = await apiFetch("/api/write-ads", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -250,7 +251,7 @@ export default function App() {
     setIsProcessing(item.id);
     addLog("Distribution Setup", "info", `Compiling custom platform copy elements...`);
     try {
-      const distRes = await fetch("/api/write-distribution", {
+      const distRes = await apiFetch("/api/write-distribution", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ articleBody: item.articleBody, topic: item.topic }),
@@ -292,7 +293,7 @@ export default function App() {
     setIsProcessing(item.id);
     addLog("Ads Generation", "info", `Compiling campaign ad sets for "${item.title}"...`);
     try {
-      const adsRes = await fetch("/api/write-ads", {
+      const adsRes = await apiFetch("/api/write-ads", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -347,7 +348,7 @@ export default function App() {
       try {
         // Step A: Create Outline
         addLog("Autopilot Run", "info", `[Step 1/4] Formulating search intents and experience maps...`);
-        const outRes = await fetch("/api/outline", {
+        const outRes = await apiFetch("/api/outline", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
@@ -362,7 +363,7 @@ export default function App() {
 
         // Step B: Compose full article
         addLog("Autopilot Run", "info", `[Step 2/4] Writing comprehensive E-E-A-T editorial draft...`);
-        const writeRes = await fetch("/api/write-article", {
+        const writeRes = await apiFetch("/api/write-article", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
@@ -378,7 +379,7 @@ export default function App() {
 
         // Step C: Compile platform distributions
         addLog("Autopilot Run", "info", `[Step 3/4] Structuring native channel posts and multimedia storyboarding...`);
-        const distRes = await fetch("/api/write-distribution", {
+        const distRes = await apiFetch("/api/write-distribution", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ articleBody, topic: newItem.topic }),
@@ -393,7 +394,7 @@ export default function App() {
 
         // Step D: Compile character checks Google & Meta Ads sets
         addLog("Autopilot Run", "info", `[Step 4/4] Composing Google PPC and Meta social ad copies...`);
-        const adsRes = await fetch("/api/write-ads", {
+        const adsRes = await apiFetch("/api/write-ads", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({

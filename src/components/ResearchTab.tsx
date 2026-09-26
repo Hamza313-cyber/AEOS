@@ -1,3 +1,4 @@
+import { apiFetch } from "../api";
 import React, { useState } from "react";
 import { TrendingTopic, KeywordResearch, ContentItem } from "../types";
 import { Search, Globe, Flame, Plus, TrendingUp, AlertCircle, Loader2, Link as LinkIcon, Compass, Sparkles } from "lucide-react";
@@ -43,7 +44,7 @@ export default function ResearchTab({
     addLog("Keyword Research", "info", `Searching semantic intent parameters for seed keyword: "${keywordInput}"...`);
 
     try {
-      const res = await fetch("/api/research-keywords", {
+      const res = await apiFetch("/api/research-keywords", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ keyword: keywordInput, audience: audienceInput }),
@@ -75,7 +76,7 @@ export default function ResearchTab({
     addLog("Trend Monitoring", "info", `Querying live Google Search indexes for real-time trending spikes in "${nicheInput}"...`);
 
     try {
-      const res = await fetch("/api/trending", {
+      const res = await apiFetch("/api/trending", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ niche: nicheInput }),
